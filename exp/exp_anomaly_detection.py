@@ -126,16 +126,25 @@ class Exp_Anomaly_Detection(Exp_Basic):
         return self.model
 
     def test(self, setting, test=0):
+        
+        
+        
+            
         test_data, test_loader = self._get_data(flag='test')
         train_data, train_loader = self._get_data(flag='train')
         if test:
             print('loading model')
-            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            # self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth'), map_location=torch.device("cuda:1")))
 
         attens_energy = []
         folder_path = './test_results/' + setting + '/'
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
+            
+        label_path = './labels/' + setting + '/'
+        if not os.path.exists(label_path):
+            os.makedirs(label_path)
 
         self.model.eval()
         self.anomaly_criterion = nn.MSELoss(reduce=False)
@@ -157,6 +166,8 @@ class Exp_Anomaly_Detection(Exp_Basic):
         # (2) find the threshold
         attens_energy = []
         test_labels = []
+        predictions = []
+        
         for i, (batch_x, batch_y) in enumerate(test_loader):
             batch_x = batch_x.float().to(self.device)
             # reconstruction
@@ -166,6 +177,9 @@ class Exp_Anomaly_Detection(Exp_Basic):
             score = score.detach().cpu().numpy()
             attens_energy.append(score)
             test_labels.append(batch_y)
+            
+            # 保存每个窗口的预测结果
+            predictions.append(outputs.detach().cpu().numpy())
 
         attens_energy = np.concatenate(attens_energy, axis=0).reshape(-1)
         test_energy = np.array(attens_energy)
@@ -175,6 +189,23 @@ class Exp_Anomaly_Detection(Exp_Basic):
 
         # (3) evaluation on the test set
         pred = (test_energy > threshold).astype(int)
+        
+        # 方法：取窗口中最后一个值的预测结果作为该窗口对应时间点的异常标签
+        window_size = self.args.seq_len
+        aligned_preds = []
+        for i in range(len(test_data) - window_size + 1):
+            aligned_preds.append(pred[i])  # 取每个滑动窗口的最后一个结果作为该点的预测
+
+        # 确保长度与原始数据对齐
+        aligned_preds = np.array(aligned_preds)
+        if len(aligned_preds) < len(test_data):
+            # 填充最后几个点，因为滑动窗口会导致最后部分数据缺失
+            aligned_preds = np.concatenate([aligned_preds, np.zeros(len(test_data) - len(aligned_preds))])
+        print(6666)
+        print(aligned_preds.shape)
+        # 保存对齐后的结果
+        np.save(os.path.join(label_path, 'aligned_predicted_labels.npy'), aligned_preds)
+        
         test_labels = np.concatenate(test_labels, axis=0).reshape(-1)
         test_labels = np.array(test_labels)
         gt = test_labels.astype(int)
